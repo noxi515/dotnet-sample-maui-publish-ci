@@ -1,0 +1,223 @@
+name: $(date:yyyyMMdd)$(rev:.r)
+
+  # trigger:
+  # branches:
+  #   include:
+  #     - master
+  # paths:
+  #   include:
+  #     - src
+
+variables:
+  # ビルドに使用する共通設定（Variable groups）
+  - group: maui-app-build-variables
+
+  # # Android署名に使用するキーストアのセキュアファイルのファイル名
+  # - name: ANDROID_KEYSTORE_FILENAME
+  #   value: android.keystore
+  # # Android署名に使用するキーストアのパスワード
+  # - name: ANDROID_KEYSTORE_PASS
+  #   value: 
+  # # Android署名に使用するキーストアのエイリアス
+  # - name: ANDROID_KEYSTORE_KEY_ALIAS
+  #   value: 
+  # # Android署名に使用するキーストアのエイリアスのパスワード
+  # - name: ANDROID_KEYSTORE_KEY_PASS
+  #   value: 
+  # # iOS署名に使用するProvisioning Profileのセキュアファイルのファイル名
+  # - name: IOS_PROVISIONING_PROFILE_NAME
+  #   value: 
+  # # iOS署名に使用する証明書のセキュアファイルのファイル名
+  # - name: IOS_CERTIFICATE_NAME
+  #   value: 
+  # # iOS署名に使用する証明書のパスワード
+  # - name: IOS_CERTIFICATE_PASS
+  #   value: 
+
+  # Azure Pipelines HostedAgentのWindowsのコンテナ種類
+  - name: VM_IMAGE_NAME_WINDOWS
+    value: windows-2022
+  # Azure Pipelines HostedAgentのLinuxのコンテナ種類
+  - name: VM_IMAGE_NAME_LINUX
+    value: ubuntu-22.04
+  # Azure Pipelines HostedAgentのMacのコンテナ種類
+  - name: VM_IMAGE_NAME_MAC
+    value: macOS-12
+
+  # MAUIアプリのプロジェクトパス
+  - name: DOTNET_MAUI_APP_PROJECT_PATH
+    value: MauiPublishSampleApp.csproj
+
+  # .NETビルド時の構成
+  - name: DOTNET_BUILD_CONFIGURATION
+    value: Release
+  # .NETターゲットフレームワーク（環境非依存）
+  - name: DOTNET_TARGET_FRAMEWORK_STANDARD
+    value: net6.0
+  # .NETターゲットフレームワーク（Windowsアプリ）
+  - name: DOTNET_TARGET_FRAMEWORK_WINDOWS
+    value: net6.0-windows10.0.19041.0
+  # .NETターゲットフレームワーク（Androidアプリ）
+  - name: DOTNET_TARGET_FRAMEWORK_ANDROID
+    value: net6.0-android
+  # .NETターゲットフレームワーク（iOSアプリ）
+  - name: DOTNET_TARGET_FRAMEWORK_IOS
+    value: net6.0-ios
+
+  # Mac上でビルドする際に使用するXcodeのバージョン
+  - name: XCODE_ROOT
+    value: /Applications/Xcode_14.0.1.app
+
+  # AndroidアプリのアプリケーションID
+  # - name: ANDROID_APPLICATION_ID
+  #   value:
+  # iOSアプリのバンドルID
+  # - name: IOS_APPLICATION_ID
+  #   value:
+
+
+stages:
+  - stage: PUBLISH_APP
+    displayName: Publish MAUI App
+    jobs:
+
+      ################################################################################
+      #
+      # Publish .NET MAUI Android
+      #
+      ################################################################################
+      - job: PUBLISH_ANDROID_APP
+        displayName: Publish MAUI Android App
+        workspace:
+          clean: all
+        pool:
+          vmImage: $(VM_IMAGE_NAME_LINUX)
+        variables:
+          DOTNET_TARGET_FRAMEWORK: $(DOTNET_TARGET_FRAMEWORK_ANDROID)
+        steps:
+          - task: UseDotNet@2
+            displayName: Install .NET SDK
+            inputs:
+              packageType: sdk
+              useGlobalJson: true
+
+          - script: dotnet workload install maui-android
+            displayName: Install .NET SDK Android Workload
+
+          - task: DownloadSecureFile@1
+            name: keystore
+            displayName: Download keystore file
+            inputs:
+              secureFile: $(ANDROID_KEYSTORE_FILENAME)
+
+          - task: DotNetCoreCLI@2
+            displayName: Restore MAUI Android App
+            inputs:
+              command: restore
+              projects: '**/*.csproj'
+              restoreArguments: '-p:TargetFramework=$(DOTNET_TARGET_FRAMEWORK)'
+              feedsToUse: select
+
+          - task: DotNetCoreCLI@2
+            displayName: Publish MAUI Android App
+            inputs:
+              command: publish
+              publishWebProjects: false
+              projects: $(DOTNET_MAUI_APP_PROJECT_PATH)
+              arguments: >-
+                -c $(DOTNET_BUILD_CONFIGURATION)
+                -f $(DOTNET_TARGET_FRAMEWORK)
+                -o $(Build.ArtifactStagingDirectory)
+                --no-restore
+                -p:ApplicationId=$(ANDROID_APPLICATION_ID)
+                -p:AndroidKeyStore=True
+                -p:AndroidSigningKeyStore=$(keystore.secureFilePath)
+                -p:AndroidSigningStorePass=$(ANDROID_KEYSTORE_PASS)
+                -p:AndroidSigningKeyAlias=$(ANDROID_KEYSTORE_ALIAS)
+                -p:AndroidSigningKeyPass=$(ANDROID_KEYSTORE_KEY_PASS)
+              zipAfterPublish: false
+              modifyOutputPath: false
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish MAUI Android App Artifacts
+            inputs:
+              PathtoPublish: $(Build.ArtifactStagingDirectory)
+              ArtifactName: android
+              publishLocation: Container
+
+
+      ################################################################################
+      #
+      # Publish .NET MAUI iOS
+      #
+      ################################################################################
+      - job: PUBLISH_IOS_APP
+        displayName: Publish MAUI iOS App
+        workspace:
+          clean: all
+        pool:
+          vmImage: $(VM_IMAGE_NAME_MAC)
+        variables:
+          DOTNET_TARGET_FRAMEWORK: $(DOTNET_TARGET_FRAMEWORK_IOS)
+        steps:
+          - task: UseDotNet@2
+            displayName: Install .NET SDK
+            inputs:
+              packageType: sdk
+              useGlobalJson: true
+
+          - script: dotnet workload install maui-ios
+            displayName: Install .NET SDK iOS Workload
+
+          - script: echo '##vso[task.setvariable variable=MD_APPLE_SDK_ROOT;]'$(XCODE_ROOT);sudo xcode-select --switch $(XCODE_ROOT)/Contents/Developer
+            displayName: 'Select the Xcode Version'
+
+          - task: InstallAppleProvisioningProfile@1
+            displayName: Install ProvisioningProfile
+            inputs:
+              provisioningProfileLocation: secureFiles
+              provProfileSecureFile: $(IOS_PROVISIONING_PROFILE_NAME)
+              removeProfile: true
+
+          - task: InstallAppleCertificate@2
+            displayName: Install Certificate
+            inputs:
+              keychain: temp
+              certSecureFile: $(IOS_CERTIFICATE_NAME)
+              certPwd: $(IOS_CERTIFICATE_PASS)
+
+          - task: DotNetCoreCLI@2
+            displayName: Restore MAUI iOS App
+            inputs:
+              command: restore
+              projects: '**/*.csproj'
+              restoreArguments: >-
+                -p:TargetFramework=$(DOTNET_TARGET_FRAMEWORK)
+                -p:RuntimeIdentifier=ios-arm64
+              feedsToUse: select
+
+          - task: DotNetCoreCLI@2
+            displayName: Publish MAUI iOS App
+            inputs:
+              command: publish
+              publishWebProjects: false
+              projects: $(DOTNET_MAUI_APP_PROJECT_PATH)
+              arguments: >-
+                -c $(DOTNET_BUILD_CONFIGURATION)
+                -f $(DOTNET_TARGET_FRAMEWORK)
+                -o $(Build.ArtifactStagingDirectory)
+                --no-restore
+                -p:ApplicationId=$(IOS_APPLICATION_ID)
+                -p:RuntimeIdentifier=ios-arm64
+                -p:ArchiveOnBuild=True
+                -p:CodesignKey="$(APPLE_CERTIFICATE_SIGNING_IDENTITY)"
+                -p:CodesignProvision=$(APPLE_PROV_PROFILE_UUID)
+              zipAfterPublish: false
+              modifyOutputPath: false
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish MAUI iOS App Artifacts
+            inputs:
+              PathtoPublish: $(Build.ArtifactStagingDirectory)
+              ArtifactName: ios
+              publishLocation: Container
